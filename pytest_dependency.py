@@ -6,7 +6,7 @@ import pytest
 
 _automark = False
 _ignore_unknown = False
-
+_accept_xfail = False
 
 def _get_bool(value):
     """Evaluate string representation of a boolean value.
@@ -69,7 +69,12 @@ class DependencyManager(object):
         self.results = {}
         self.scope = scope
 
+    def _accept_xfail(self, rep):
+        '''Take xfail and accept_xfail into account.'''
+        return _accept_xfail and (rep.when == 'call') and (rep.outcome == 'skipped') and (hasattr(rep, 'wasxfail'))
+
     def addResult(self, item, name, rep):
+        self.results[rep.when] = 'passed' if self._accept_xfail(rep) else rep.outcome
         if not name:
             # Old versions of pytest used to add an extra "::()" to
             # the node ids of class methods to denote the class
@@ -131,13 +136,17 @@ def pytest_addoption(parser):
     parser.addini("automark_dependency", 
                   "Add the dependency marker to all tests automatically", 
                   default=False)
+    parser.addini("accept_xfail", 
+                  "Consider xfailing dependencies as succesful dependencies.", 
+                  type="bool", default=False)
     parser.addoption("--ignore-unknown-dependency", 
                      action="store_true", default=False, 
                      help="ignore dependencies whose outcome is not known")
 
 
 def pytest_configure(config):
-    global _automark, _ignore_unknown
+    global _accept_xfail, _automark, _ignore_unknown
+    _accept_xfail = config.getini("accept_xfail")
     _automark = _get_bool(config.getini("automark_dependency"))
     _ignore_unknown = config.getoption("--ignore-unknown-dependency")
     config.addinivalue_line("markers", 
