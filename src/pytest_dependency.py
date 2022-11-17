@@ -21,8 +21,8 @@ class DependencyItemStatus(object):
         self.results = {w: None for w in self.Phases}
 
     def __str__(self):
-        l = ["%s: %s" % (w, self.results[w]) for w in self.Phases]
-        return "Status(%s)" % ", ".join(l)
+        status_list = [f"{w}: {self.results[w]}" for w in self.Phases]
+        return f'Status({", ".join(status_list)})'
 
     def _accept_xfail(self, rep):
         """Take xfail and accept_xfail into account."""
@@ -74,7 +74,7 @@ class DependencyManager(object):
             # the node ids of class methods to denote the class
             # instance.  This has been removed in pytest 4.0.0.
             nodeid = item.nodeid.replace("::()::", "::")
-            if self.scope == "session" or self.scope == "package":
+            if self.scope in ["session", "package"]:
                 name = nodeid
             elif self.scope == "module":
                 name = nodeid.split("::", 1)[1]
@@ -110,7 +110,7 @@ class DependencyManager(object):
                 if _ignore_unknown:
                     continue
             logger.info("skip %s because it depends on %s", item.name, i)
-            pytest.skip("%s depends on %s" % (item.name, i))
+            pytest.skip(f"{item.name} depends on {i}")
 
 
 def depends(request, other, scope="module"):
@@ -185,8 +185,7 @@ def pytest_runtest_makereport(item, call):
         rep = outcome.get_result()
         name = marker.kwargs.get("name") if marker is not None else None
         for scope in DependencyManager.ScopeCls:
-            manager = DependencyManager.getManager(item, scope=scope)
-            if manager:
+            if manager := DependencyManager.getManager(item, scope=scope):
                 manager.addResult(item, name, rep)
 
 
@@ -196,8 +195,7 @@ def pytest_runtest_setup(item):
     """
     marker = item.get_closest_marker("dependency")
     if marker is not None:
-        depends = marker.kwargs.get("depends")
-        if depends:
+        if depends := marker.kwargs.get("depends"):
             scope = marker.kwargs.get("scope", "module")
             manager = DependencyManager.getManager(item, scope=scope)
             manager.checkDepend(depends, item)
