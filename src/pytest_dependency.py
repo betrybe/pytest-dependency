@@ -208,7 +208,7 @@ def mark_dependency(mocked, dependent_tests):
     )
 
 
-def mark_xfail(mocked, expected=AssertionError):
+def mark_xfail(mocked, expected: Type[BaseException] = AssertionError):
     """
     Sets up parametrization with a mocked implementation expected to fail.
 
