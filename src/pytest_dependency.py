@@ -3,6 +3,7 @@
 __version__ = "$VERSION"
 
 import logging
+from typing import Type
 import pytest
 
 logger = logging.getLogger(__name__)
