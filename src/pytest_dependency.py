@@ -228,7 +228,11 @@ def mark_xfail(mocked, expected: Type[BaseException] = AssertionError):
     return pytest.param(
         mocked,
         marks=[
-            pytest.mark.xfail(raises=expected, reason="Can Fail", strict=True),
+            pytest.mark.xfail(
+                raises=expected,
+                reason=mocked.__doc__ or "Should fail",
+                strict=True,
+            ),
             pytest.mark.dependency(),
         ],
     )
