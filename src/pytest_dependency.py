@@ -3,6 +3,7 @@
 __version__ = "$VERSION"
 
 import logging
+from typing import Type
 import pytest
 
 logger = logging.getLogger(__name__)
@@ -13,38 +14,43 @@ _ignore_unknown = False
 
 
 class DependencyItemStatus(object):
-    """Status of a test item in a dependency manager.
-    """
+    """Status of a test item in a dependency manager."""
 
-    Phases = ('setup', 'call', 'teardown')
+    Phases = ("setup", "call", "teardown")
 
     def __init__(self):
-        self.results = { w:None for w in self.Phases }
+        self.results = {w: None for w in self.Phases}
 
     def __str__(self):
-        l = ["%s: %s" % (w, self.results[w]) for w in self.Phases]
-        return "Status(%s)" % ", ".join(l)
+        status_list = [f"{w}: {self.results[w]}" for w in self.Phases]
+        return f'Status({", ".join(status_list)})'
 
     def _accept_xfail(self, rep):
-        '''Take xfail and accept_xfail into account.'''
-        return _accept_xfail and (rep.when == 'call') and (rep.outcome == 'skipped') and (hasattr(rep, 'wasxfail'))
+        """Take xfail and accept_xfail into account."""
+        return (
+            _accept_xfail
+            and (rep.when == "call")
+            and (rep.outcome == "skipped")
+            and (hasattr(rep, "wasxfail"))
+        )
 
     def addResult(self, rep):
-        self.results[rep.when] = 'passed' if self._accept_xfail(rep) else rep.outcome
+        self.results[rep.when] = (
+            "passed" if self._accept_xfail(rep) else rep.outcome
+        )
 
     def isSuccess(self):
-        return list(self.results.values()) == ['passed', 'passed', 'passed']
+        return list(self.results.values()) == ["passed", "passed", "passed"]
 
 
 class DependencyManager(object):
-    """Dependency manager, stores the results of tests.
-    """
+    """Dependency manager, stores the results of tests."""
 
     ScopeCls = {
-        'session': pytest.Session,
-        'package': pytest.Package,
-        'module': pytest.Module,
-        'class': pytest.Class,
+        "session": pytest.Session,
+        "package": pytest.Package,
+        "module": pytest.Module,
+        "class": pytest.Class,
     }
 
     @classmethod
@@ -55,7 +61,7 @@ class DependencyManager(object):
         node = item.getparent(cls.ScopeCls[scope])
         if not node:
             return None
-        if not hasattr(node, 'dependencyManager'):
+        if not hasattr(node, "dependencyManager"):
             node.dependencyManager = cls(scope)
         return node.dependencyManager
 
@@ -69,23 +75,30 @@ class DependencyManager(object):
             # the node ids of class methods to denote the class
             # instance.  This has been removed in pytest 4.0.0.
             nodeid = item.nodeid.replace("::()::", "::")
-            if self.scope == 'session' or self.scope == 'package':
+            if self.scope in ["session", "package"]:
                 name = nodeid
-            elif self.scope == 'module':
+            elif self.scope == "module":
                 name = nodeid.split("::", 1)[1]
-            elif self.scope == 'class':
+            elif self.scope == "class":
                 name = nodeid.split("::", 2)[2]
             else:
-                raise RuntimeError("Internal error: invalid scope '%s'"
-                                   % self.scope)
+                raise RuntimeError(
+                    "Internal error: invalid scope '%s'" % self.scope
+                )
         status = self.results.setdefault(name, DependencyItemStatus())
-        logger.debug("register %s %s %s in %s scope",
-                     rep.when, name, rep.outcome, self.scope)
+        logger.debug(
+            "register %s %s %s in %s scope",
+            rep.when,
+            name,
+            rep.outcome,
+            self.scope,
+        )
         status.addResult(rep)
 
     def checkDepend(self, depends, item):
-        logger.debug("check dependencies of %s in %s scope ...",
-                     item.name, self.scope)
+        logger.debug(
+            "check dependencies of %s in %s scope ...", item.name, self.scope
+        )
         for i in depends:
             if i in self.results:
                 if self.results[i].isSuccess():
@@ -98,10 +111,10 @@ class DependencyManager(object):
                 if _ignore_unknown:
                     continue
             logger.info("skip %s because it depends on %s", item.name, i)
-            pytest.skip("%s depends on %s" % (item.name, i))
+            pytest.skip(f"{item.name} depends on {i}")
 
 
-def depends(request, other, scope='module'):
+def depends(request, other, scope="module"):
     """Add dependency on other test.
 
     Call pytest.skip() unless a successful outcome of all of the tests in
@@ -131,15 +144,24 @@ def depends(request, other, scope='module'):
 
 
 def pytest_addoption(parser):
-    parser.addini("automark_dependency", 
-                  "Add the dependency marker to all tests automatically", 
-                  type="bool", default=False)
-    parser.addini("accept_xfail", 
-                  "Consider xfailing dependencies as succesful dependencies.", 
-                  type="bool", default=False)
-    parser.addoption("--ignore-unknown-dependency", 
-                     action="store_true", default=False, 
-                     help="ignore dependencies whose outcome is not known")
+    parser.addini(
+        "automark_dependency",
+        "Add the dependency marker to all tests automatically",
+        type="bool",
+        default=False,
+    )
+    parser.addini(
+        "accept_xfail",
+        "Consider xfailing dependencies as succesful dependencies.",
+        type="bool",
+        default=False,
+    )
+    parser.addoption(
+        "--ignore-unknown-dependency",
+        action="store_true",
+        default=False,
+        help="ignore dependencies whose outcome is not known",
+    )
 
 
 def pytest_configure(config):
@@ -147,24 +169,24 @@ def pytest_configure(config):
     _accept_xfail = config.getini("accept_xfail")
     _automark = config.getini("automark_dependency")
     _ignore_unknown = config.getoption("--ignore-unknown-dependency")
-    config.addinivalue_line("markers", 
-                            "dependency(name=None, depends=[]): "
-                            "mark a test to be used as a dependency for "
-                            "other tests or to depend on other tests.")
+    config.addinivalue_line(
+        "markers",
+        "dependency(name=None, depends=[]): "
+        "mark a test to be used as a dependency for "
+        "other tests or to depend on other tests.",
+    )
 
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
 def pytest_runtest_makereport(item, call):
-    """Store the test outcome if this item is marked "dependency".
-    """
+    """Store the test outcome if this item is marked "dependency"."""
     outcome = yield
     marker = item.get_closest_marker("dependency")
     if marker is not None or _automark:
         rep = outcome.get_result()
-        name = marker.kwargs.get('name') if marker is not None else None
+        name = marker.kwargs.get("name") if marker is not None else None
         for scope in DependencyManager.ScopeCls:
-            manager = DependencyManager.getManager(item, scope=scope)
-            if (manager):
+            if manager := DependencyManager.getManager(item, scope=scope):
                 manager.addResult(item, name, rep)
 
 
@@ -174,8 +196,43 @@ def pytest_runtest_setup(item):
     """
     marker = item.get_closest_marker("dependency")
     if marker is not None:
-        depends = marker.kwargs.get('depends')
-        if depends:
-            scope = marker.kwargs.get('scope', 'module')
+        if depends := marker.kwargs.get("depends"):
+            scope = marker.kwargs.get("scope", "module")
             manager = DependencyManager.getManager(item, scope=scope)
             manager.checkDepend(depends, item)
+
+
+def mark_dependency(mocked, dependent_tests):
+    return pytest.param(
+        mocked,
+        marks=[pytest.mark.dependency(depends=dependent_tests)],
+    )
+
+
+def mark_xfail(mocked, expected: Type[BaseException] = AssertionError):
+    """
+    Sets up parametrization with a mocked implementation expected to fail.
+
+    Parameters
+    ----------
+    mocked : function
+        the mocked implementation to try out.
+    expected : Exception, optional
+        An expected Exception, by default AssertionError
+
+    Returns
+    -------
+    pytest.param
+        Configured param for pytest fixture parametrization.
+    """
+    return pytest.param(
+        mocked,
+        marks=[
+            pytest.mark.xfail(
+                raises=expected,
+                reason=mocked.__doc__ or "Should fail",
+                strict=True,
+            ),
+            pytest.mark.dependency(),
+        ],
+    )
