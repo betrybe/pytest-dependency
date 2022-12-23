@@ -1,10 +1,17 @@
-"""$DOC"""
+"""pytest-dependency - Manage dependencies of tests
 
-__version__ = "$VERSION"
+This pytest plugin manages dependencies of tests.  It allows to mark
+some tests as dependent from other tests.  These tests will then be
+skipped if any of the dependencies did fail or has been skipped.
+"""
+
+__version__ = "UNKNOWN"
 
 import logging
-from typing import Type
 import pytest
+import inspect
+from types import ModuleType
+from typing import Callable, List, Type, Union
 
 logger = logging.getLogger(__name__)
 
@@ -236,3 +243,67 @@ def mark_xfail(mocked, expected: Type[BaseException] = AssertionError):
             pytest.mark.dependency(),
         ],
     )
+
+
+def build_mocked_assets(
+    mocks_module: ModuleType,
+    asset_to_mock: Union[Callable, Type],
+    test_function: Callable,
+    **expected_raise: Type[BaseException],
+) -> List:
+    """
+    Sets up parameters with mocked implementations expected to fail.
+
+    Parameters
+    ----------
+    `mocks_module` : module
+        the module that contains the mocking assets (paremeters)
+    `asset_to_mock` : function or class
+        the asset (function or class) intended to be mocked
+    `test_function` : function
+        the test function which will be parametrized
+    keyword arguments:
+        replace default xfail exception for a given mocking asset
+        Example: `build_mocked_assets(..., _TestSomeClass=TypeError)`
+
+    Returns
+    -------
+    `list`
+        Configured mocked params for pytest fixture parametrization.
+    """
+    asset_map = _build_asset_map(mocks_module)
+    _mocked_tests = [
+        f"{test_function.__name__}[{asset_name}]" for asset_name in asset_map
+    ]
+
+    _mocking_config = _build_mocking_config(
+        asset_to_mock, expected_raise, asset_map, _mocked_tests
+    )
+    return _mocking_config
+
+
+def _build_mocking_config(
+    asset_to_mock, expected_raise, asset_map, _mocked_tests
+):
+    _mocking_config = [
+        mark_xfail(asset)
+        for asset_name, asset in asset_map.items()
+        if asset_name not in expected_raise
+    ]
+    for asset_name, expected in expected_raise.items():
+        _mocking_config.append(mark_xfail(asset_map[asset_name], expected))
+
+    _mocking_config.append(mark_dependency(asset_to_mock, _mocked_tests))
+    return _mocking_config
+
+
+def _build_asset_map(mocks_module):
+    return {
+        asset_name: asset
+        for asset_name, asset in inspect.getmembers(mocks_module)
+        if (
+            (inspect.isclass(asset) or inspect.isfunction(asset))
+            and asset_name.lower().startswith("_test")
+            and inspect.getmodule(asset) is mocks_module
+        )
+    }
