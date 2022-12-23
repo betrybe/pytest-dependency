@@ -267,14 +267,14 @@ def build_mocked_assets(
         Configured mocked params for pytest fixture parametrization.
     """
     asset_map = _build_asset_map(mocks_module)
-    _mocked_tests = [
+    mocked_tests = [
         f"{test_function.__name__}[{asset_name}]" for asset_name in asset_map
     ]
 
-    _mocking_config = _build_mocking_config(
-        asset_to_mock, expected_raise, asset_map, _mocked_tests
+    mocking_config = _build_mocking_config(
+        asset_to_mock, expected_raise, asset_map, mocked_tests
     )
-    return _mocking_config
+    return mocking_config
 
 
 def _build_mocking_config(
