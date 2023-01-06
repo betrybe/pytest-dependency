@@ -2,9 +2,13 @@
 
 __version__ = "$VERSION"
 
+import inspect
 import logging
-from typing import Type
+from types import ModuleType
+from typing import Callable, List, Type
+
 import pytest
+from _pytest.mark.structures import ParameterSet
 
 logger = logging.getLogger(__name__)
 
@@ -236,3 +240,85 @@ def mark_xfail(mocked, expected: Type[BaseException] = AssertionError):
             pytest.mark.dependency(),
         ],
     )
+
+
+def build_mocked_assets(
+    mocks_module: ModuleType,
+    asset_to_mock: Callable,
+    test_function: Callable,
+    custom_exceptions: dict[Callable, Type[BaseException]] = {},
+) -> List[ParameterSet]:
+    """
+    Builds the parameters for a test-testing fixture.
+
+    Returns a list of the mocking implementations (present in `mocks_module`)
+    of `asset_to_mock` configured as XFAIL dependencies when running
+    `test_function`.
+
+    The lookup for mocking implementations in `mocks_module` checks if:
+    - the asset is a function or class
+    - the asset's name starts with '_test' (case insensitive)
+    - the asset's module is `mocks_module` (avoids unwanted importings)
+
+    Parameters
+    ----------
+    `mocks_module` : ModuleType
+        the module that contains the mocking assets (parameters)
+    `asset_to_mock` : function or class
+        the asset (function or class) intended to be mocked
+    `test_function` : function
+        the test function which will be parametrized
+    `custom_exceptions` : dict
+        Dictionary of [mocking asset -> expected exception] to replace the
+        default XFAIL exceptions (`AssertionError`).
+        Example:
+        `build_mocked_assets(..., custom_exceptions={_TestThisFunc:TypeError})`
+
+    Returns
+    -------
+    `list[ParameterSet]`
+        Configured mocking params for the pytest parametrization.
+    """
+    asset_map = _build_asset_map(mocks_module)
+
+    if any(asset not in asset_map for asset in custom_exceptions):
+        raise ValueError(
+            "All keys for 'custom_exceptions' dict must be an asset of "
+            f"module {mocks_module}."
+        )
+
+    mocked_test_names = [
+        f"{test_function.__name__}[{asset_name}]"
+        for asset_name in asset_map.values()
+    ]
+
+    return _build_mocking_config(
+        asset_to_mock, custom_exceptions, asset_map, mocked_test_names
+    )
+
+
+def _build_mocking_config(
+    asset_to_mock, custom_exceptions, asset_map, mocked_test_names
+) -> List[ParameterSet]:
+    mocking_config = [
+        mark_xfail(asset)
+        for asset in asset_map
+        if asset not in custom_exceptions
+    ]
+    for asset, expected in custom_exceptions.items():
+        mocking_config.append(mark_xfail(asset, expected))
+
+    mocking_config.append(mark_dependency(asset_to_mock, mocked_test_names))
+    return mocking_config
+
+
+def _build_asset_map(mocks_module):
+    return {
+        asset: asset_name
+        for asset_name, asset in inspect.getmembers(mocks_module)
+        if (
+            (inspect.isclass(asset) or inspect.isfunction(asset))
+            and asset_name.lower().startswith("_test")
+            and inspect.getmodule(asset) is mocks_module
+        )
+    }
