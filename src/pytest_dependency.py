@@ -255,6 +255,11 @@ def build_mocked_assets(
     of `asset_to_mock` configured as XFAIL dependencies when running
     `test_function`.
 
+    The lookup for mocking implementations in `mocks_module` checks if:
+    - the asset is a function or class
+    - the asset's name starts with '_test' (case insensitive)
+    - the asset's module is `mocks_module` (avoids unwanted importings)
+
     Parameters
     ----------
     `mocks_module` : ModuleType
