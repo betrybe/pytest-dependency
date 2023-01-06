@@ -2,13 +2,13 @@
 
 __version__ = "$VERSION"
 
-import logging
-import pytest
-from _pytest.mark.structures import ParameterSet
-
 import inspect
+import logging
 from types import ModuleType
 from typing import Callable, List, Type
+
+import pytest
+from _pytest.mark.structures import ParameterSet
 
 logger = logging.getLogger(__name__)
 
