@@ -5,7 +5,7 @@ __version__ = "$VERSION"
 import inspect
 import logging
 from types import ModuleType
-from typing import Callable, List, Type
+from typing import Callable, Dict, List, Type
 
 import pytest
 from _pytest.mark.structures import ParameterSet
@@ -246,7 +246,7 @@ def build_mocked_assets(
     mocks_module: ModuleType,
     asset_to_mock: Callable,
     test_function: Callable,
-    custom_exceptions: dict[Callable, Type[BaseException]] = {},
+    custom_exceptions: Dict[Callable, Type[BaseException]] = {},
 ) -> List[ParameterSet]:
     """
     Builds the parameters for a test-testing fixture.
