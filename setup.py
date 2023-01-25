@@ -25,7 +25,7 @@ try:
 except (ImportError, LookupError):
     try:
         with open(".version", "rt") as f:
-            version = f.read()
+            version = f.read().strip()
     except (OSError, IOError):
         distutils.log.warn("warning: cannot determine version number")
         version = "UNKNOWN"
@@ -119,3 +119,4 @@ setup(
     },
     cmdclass = {'build_py': build_py, 'sdist': sdist},
 )
+
