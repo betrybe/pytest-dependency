@@ -2,7 +2,6 @@
 *~
 .cache/
 __pycache__/
-/.version
 /MANIFEST
 /build/
 /dist/
