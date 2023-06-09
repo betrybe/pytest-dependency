@@ -4,6 +4,8 @@ __version__ = "$VERSION"
 
 import inspect
 import logging
+from dataclasses import dataclass
+from pathlib import Path
 from types import ModuleType
 from typing import Callable, Dict, List, Type
 
@@ -99,26 +101,50 @@ class DependencyManager(object):
         )
         status.addResult(rep)
 
-    def checkDepend(self, depends, item):
+    def checkDepend(self, depends, item, include_all_instances=False):
         logger.debug(
             "check dependencies of %s in %s scope ...", item.name, self.scope
         )
-        for i in depends:
-            if i in self.results:
-                if self.results[i].isSuccess():
-                    logger.debug("... %s succeeded", i)
+        for dep in depends:
+            # needs to change this condition
+            if include_all_instances:
+                dep_instances = [
+                    dep_instance
+                    for dep_instance in self.results
+                    if dep_instance.startswith(dep)
+                ]
+                for dep_instance in dep_instances:
+                    if self.results[dep_instance].isSuccess():
+                        logger.debug("... %s succeeded", dep_instance)
+                        continue
+                    else:
+                        logger.debug("... %s has not succeeded", dep_instance)
+                        logger.info(
+                            "skip %s because it depends on %s",
+                            item.name,
+                            dep_instance,
+                        )
+                        pytest.skip(f"{item.name} depends on {dep_instance}")
+                else:
+                    logger.debug("... %s is unknown", dep)
+                    if _ignore_unknown:
+                        continue
+                continue
+            elif dep in self.results:
+                if self.results[dep].isSuccess():
+                    logger.debug("... %s succeeded", dep)
                     continue
                 else:
-                    logger.debug("... %s has not succeeded", i)
+                    logger.debug("... %s has not succeeded", dep)
             else:
-                logger.debug("... %s is unknown", i)
+                logger.debug("... %s is unknown", dep)
                 if _ignore_unknown:
                     continue
-            logger.info("skip %s because it depends on %s", item.name, i)
-            pytest.skip(f"{item.name} depends on {i}")
+            logger.info("skip %s because it depends on %s", item.name, dep)
+            pytest.skip(f"{item.name} depends on {dep}")
 
 
-def depends(request, other, scope="module"):
+def depends(request, other, scope="module", include_all_instances=False):
     """Add dependency on other test.
 
     Call pytest.skip() unless a successful outcome of all of the tests in
@@ -144,7 +170,7 @@ def depends(request, other, scope="module"):
     """
     item = request.node
     manager = DependencyManager.getManager(item, scope=scope)
-    manager.checkDepend(other, item)
+    manager.checkDepend(other, item, include_all_instances)
 
 
 def pytest_addoption(parser):
@@ -203,7 +229,7 @@ def pytest_runtest_setup(item):
         if depends := marker.kwargs.get("depends"):
             scope = marker.kwargs.get("scope", "module")
             manager = DependencyManager.getManager(item, scope=scope)
-            manager.checkDepend(depends, item)
+            manager.checkDepend(depends, item, include_all_instances=True)
 
 
 def mark_dependency(mocked, dependent_tests):
@@ -322,3 +348,68 @@ def _build_asset_map(mocks_module):
             and inspect.getmodule(asset) is mocks_module
         )
     }
+
+
+@dataclass
+class TestAssessmentConfigs:
+    STUDENT_TEST_FILE_PATH: str
+    STUDENT_TEST_FUNCTIONS: List[str]
+    BROKEN_ASSET_LIST: List[Callable]
+    PATCH_TARGET: str
+
+
+def get_test_assessment_configs(
+    target_asset: Callable,
+    broken_assets_module: ModuleType,
+    student_test_module: ModuleType,
+) -> TestAssessmentConfigs:
+    """Returns a dataclass with the configs for the assessment of a
+    student's test file.
+
+    Parameters
+    ----------
+    target_asset : Callable
+        The asset (function or class) intended to be mocked
+    broken_assets_module : ModuleType
+        The module that contains the mocking assets (parameters)
+    student_test_module : ModuleType
+        The student's test module
+
+    Returns
+    -------
+        TestAssessmentConfigs
+    """
+    STUDENT_TEST_FILE_PATH = str(
+        Path(student_test_module.__file__).relative_to(Path.cwd())
+    )
+
+    def get_user_test_functions_from(test_file_path):
+        return [
+            test_file_path + "::" + member[0]
+            for member in inspect.getmembers(student_test_module)
+            if inspect.isfunction(member[1]) and member[0].startswith("test_")
+        ]
+
+    STUDENT_TEST_FUNCTIONS = get_user_test_functions_from(
+        STUDENT_TEST_FILE_PATH
+    )
+
+    BROKEN_ASSET_LIST = [
+        asset
+        for asset_name, asset in inspect.getmembers(broken_assets_module)
+        if (
+            (inspect.isclass(asset) or inspect.isfunction(asset))
+            and asset_name.lower().startswith("_test")
+            and inspect.getmodule(asset) is broken_assets_module
+        )
+    ]
+
+    PATCH_TARGET = (
+        student_test_module.__name__ + "." + target_asset.__qualname__
+    )
+    return TestAssessmentConfigs(
+        STUDENT_TEST_FILE_PATH,
+        STUDENT_TEST_FUNCTIONS,
+        BROKEN_ASSET_LIST,
+        PATCH_TARGET,
+    )
