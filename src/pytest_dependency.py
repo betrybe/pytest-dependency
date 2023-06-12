@@ -4,10 +4,12 @@ __version__ = "$VERSION"
 
 import inspect
 import logging
+import os
+import contextlib
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Callable, Dict, List, Type
+from typing import Callable, Dict, List, Type, Union, Sequence
 
 import pytest
 from _pytest.mark.structures import ParameterSet
@@ -350,11 +352,13 @@ def _build_asset_map(mocks_module):
     }
 
 
+
 @dataclass
 class TestAssessmentConfigs:
     STUDENT_TEST_FILE_PATH: str
     STUDENT_TEST_FUNCTIONS: List[str]
-    BROKEN_ASSET_LIST: List[Callable]
+    BROKEN_ASSETS_LIST: List[Callable]
+    BROKEN_ASSETS_FILE_PATH: str
     PATCH_TARGET: str
 
 
@@ -394,7 +398,7 @@ def get_test_assessment_configs(
         STUDENT_TEST_FILE_PATH
     )
 
-    BROKEN_ASSET_LIST = [
+    BROKEN_ASSETS_LIST = [
         asset
         for asset_name, asset in inspect.getmembers(broken_assets_module)
         if (
@@ -407,9 +411,86 @@ def get_test_assessment_configs(
     PATCH_TARGET = (
         student_test_module.__name__ + "." + target_asset.__qualname__
     )
+    BROKEN_ASSETS_FILE_PATH = str(
+        Path(broken_assets_module.__file__).relative_to(Path.cwd())
+    )
     return TestAssessmentConfigs(
         STUDENT_TEST_FILE_PATH,
         STUDENT_TEST_FUNCTIONS,
-        BROKEN_ASSET_LIST,
+        BROKEN_ASSETS_LIST,
+        BROKEN_ASSETS_FILE_PATH,
         PATCH_TARGET,
     )
+
+
+def assert_fails_with_broken_asset(
+    broken_asset: Callable,
+    return_code: Union[int, pytest.ExitCode],
+    ta_cfg: TestAssessmentConfigs,
+):
+    """
+    Raises AssertionError if return_code is not pytest.ExitCode.TESTS_FAILED,
+    and prints a hint with the broken asset's docstring.
+
+    Parameters
+    ----------
+    broken_asset : str
+        broken asset (function or class) intended to substitute the target
+        asset, probably a param of `pytest.mark.parametrize`
+    return_code : int | ExitCode
+        ExitCode of the `pytest.main()` call
+    ta_cfg : TestAssessmentConfigs
+        Object with the configs for the assessment of a student's test file,
+        obtained from `get_test_assessment_configs()`
+
+    Raises
+    ------
+    AssertionError
+        If return_code is not pytest.ExitCode.TESTS_FAILED, and prints a hint
+        with the broken asset's docstring.
+    """
+    if return_code == pytest.ExitCode.OK:
+        hint = (
+            f"Nossa dica é: '{broken_asset.__doc__}'\n"
+            if broken_asset.__doc__
+            else (
+                "Verifique se seus testes atendem aos detalhes do requisito.\n"
+            )
+        )
+
+        raise AssertionError(
+            f"Seus testes em '{ta_cfg.STUDENT_TEST_FILE_PATH}' deveriam falhar"
+            f" com a função '{broken_asset.__name__}' do arquivo "
+            f"'{ta_cfg.BROKEN_ASSETS_FILE_PATH}'.\n"
+            f"{hint}"
+        )
+    elif return_code != pytest.ExitCode.TESTS_FAILED:
+        raise AssertionError(
+            "Ocorreu algum erro inexperado ao executar seus testes.\n"
+            f"Código de saída: {return_code.name}\n"
+        )
+
+
+def run_pytest_quietly(
+    pytest_args: Union[List[str], os.PathLike] = None,
+    pytest_plguins: Sequence[object] = None,
+):
+    """Run pytest.main() without printing to stdout.
+
+    Parameters
+    ----------
+    pytest_args : Union[List[str], os.PathLike[str]], optional
+        Arguments to pass to pytest.main()
+    pytest_plguins : Sequence[object], optional
+        Plugins to pass to pytest.main()
+
+    Returns
+    -------
+    int
+        Exit code of pytest.main()
+    """
+
+    with open(os.devnull, "w") as student_output:
+        with contextlib.redirect_stdout(student_output):
+            return_code = pytest.main(pytest_args)
+    return return_code
