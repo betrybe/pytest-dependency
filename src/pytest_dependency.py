@@ -521,7 +521,7 @@ def assert_fails_with_broken_asset(
         )
     elif return_code != pytest.ExitCode.TESTS_FAILED:
         raise AssertionError(
-            "Ocorreu algum erro inexperado ao executar seus testes.\n"
+            "Ocorreu algum erro inesperado ao executar seus testes.\n"
             f"Código de saída: {return_code.name}\n"
         )
 
