@@ -12,7 +12,7 @@ from types import ModuleType
 from typing import Callable, Dict, List, Type, Union, Sequence
 
 import pytest
-from _pytest.mark.structures import ParameterSet
+from _pytest.mark.structures import ParameterSet, MarkDecorator
 
 logger = logging.getLogger(__name__)
 
@@ -352,7 +352,6 @@ def _build_asset_map(mocks_module):
     }
 
 
-
 @dataclass
 class TestAssessmentConfigs:
     STUDENT_TEST_FILE_PATH: str
@@ -423,6 +422,62 @@ def get_test_assessment_configs(
     )
 
 
+def get_skip_markers(ta_cfg: TestAssessmentConfigs) -> List[MarkDecorator]:
+    """Returns a list of skip markers for `pytestmark` based on the configs for
+    the assessment of a student's test file. The list contains:
+        - a skipif marker if the student's test file does not have any test
+        functions yet
+        - a dependency marker for each test function in the student's test file
+
+    Parameters
+    ----------
+    ta_cfg : TestAssessmentConfigs
+        Object with the configs for the assessment of a student's test file,
+        obtained from `get_test_assessment_configs()`
+
+    Returns
+    -------
+    List[MarkDecorator]
+        List of skip markers for pytestmark
+    """
+    return [
+        pytest.mark.skipif(
+            not ta_cfg.STUDENT_TEST_FUNCTIONS,
+            reason="Requisito não implementado",
+        ),
+        pytest.mark.dependency(
+            depends=ta_cfg.STUDENT_TEST_FUNCTIONS,
+            scope="session",
+            include_all_instances=True,
+        ),
+    ]
+
+
+def run_pytest_quietly(
+    pytest_args: Union[List[str], os.PathLike] = None,
+    pytest_plguins: Sequence[object] = None,
+):
+    """Run pytest.main() without printing to stdout.
+
+    Parameters
+    ----------
+    pytest_args : Union[List[str], os.PathLike[str]], optional
+        Arguments to pass to pytest.main()
+    pytest_plguins : Sequence[object], optional
+        Plugins to pass to pytest.main()
+
+    Returns
+    -------
+    int
+        Exit code of pytest.main()
+    """
+
+    with open(os.devnull, "w") as student_output:
+        with contextlib.redirect_stdout(student_output):
+            return_code = pytest.main(pytest_args)
+    return return_code
+
+
 def assert_fails_with_broken_asset(
     broken_asset: Callable,
     return_code: Union[int, pytest.ExitCode],
@@ -471,26 +526,34 @@ def assert_fails_with_broken_asset(
         )
 
 
-def run_pytest_quietly(
-    pytest_args: Union[List[str], os.PathLike] = None,
-    pytest_plguins: Sequence[object] = None,
+def assert_fails_with_missing_feature_usage(
+    feature_description: str,
+    return_code: Union[int, pytest.ExitCode],
+    ta_cfg: TestAssessmentConfigs,
 ):
-    """Run pytest.main() without printing to stdout.
+    """
+    Raises AssertionError if return_code is not pytest.ExitCode.TESTS_FAILED,
+    and prints a hint with the feature's description.
 
     Parameters
     ----------
-    pytest_args : Union[List[str], os.PathLike[str]], optional
-        Arguments to pass to pytest.main()
-    pytest_plguins : Sequence[object], optional
-        Plugins to pass to pytest.main()
-
-    Returns
-    -------
-    int
-        Exit code of pytest.main()
+    feature_description : str
+        Description of the feature that should be used in the student's test
+        file
+    return_code : int | ExitCode
+        ExitCode of the `pytest.main()` call
+    ta_cfg : TestAssessmentConfigs
+        Object with the configs for the assessment of a student's test file,
+        obtained from `get_test_assessment_configs()`
     """
+    if return_code == pytest.ExitCode.OK:
 
-    with open(os.devnull, "w") as student_output:
-        with contextlib.redirect_stdout(student_output):
-            return_code = pytest.main(pytest_args)
-    return return_code
+        raise AssertionError(
+            f"Seus testes em '{ta_cfg.STUDENT_TEST_FILE_PATH}' deveriam usar "
+            f"a seguinte feature do Pytest: {feature_description}.\n"
+        )
+    elif return_code != pytest.ExitCode.TESTS_FAILED:
+        raise AssertionError(
+            "Ocorreu algum erro inesperado ao executar seus testes.\n"
+            f"Código de saída: {return_code.name}\n"
+        )
