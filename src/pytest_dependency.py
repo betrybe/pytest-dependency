@@ -9,7 +9,16 @@ import contextlib
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Callable, Dict, List, Type, Union, Sequence
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Type,
+    Union,
+    Sequence,
+)
 
 import pytest
 from _pytest.mark.structures import ParameterSet, MarkDecorator
@@ -27,7 +36,7 @@ class DependencyItemStatus(object):
     Phases = ("setup", "call", "teardown")
 
     def __init__(self):
-        self.results = {w: None for w in self.Phases}
+        self.results: Dict[str, Optional[str]] = {w: None for w in self.Phases}
 
     def __str__(self):
         status_list = [f"{w}: {self.results[w]}" for w in self.Phases]
@@ -172,7 +181,7 @@ def depends(request, other, scope="module", include_all_instances=False):
     """
     item = request.node
     manager = DependencyManager.getManager(item, scope=scope)
-    manager.checkDepend(other, item, include_all_instances)
+    manager.checkDepend(other, item, include_all_instances)  # type: ignore
 
 
 def pytest_addoption(parser):
@@ -231,7 +240,11 @@ def pytest_runtest_setup(item):
         if depends := marker.kwargs.get("depends"):
             scope = marker.kwargs.get("scope", "module")
             manager = DependencyManager.getManager(item, scope=scope)
-            manager.checkDepend(depends, item, include_all_instances=True)
+            manager.checkDepend(  # type: ignore
+                depends,
+                item,
+                include_all_instances=True,
+            )
 
 
 def mark_dependency(mocked, dependent_tests):
@@ -362,9 +375,11 @@ class TestAssessmentConfigs:
 
 
 def get_test_assessment_configs(
-    target_asset: Callable,
+    target_asset: Callable[[Any], Any],
     broken_assets_module: ModuleType,
     student_test_module: ModuleType,
+    *,
+    target_asset_module: Optional[ModuleType] = None,
 ) -> TestAssessmentConfigs:
     """Returns a dataclass with the configs for the assessment of a
     student's test file.
@@ -374,16 +389,28 @@ def get_test_assessment_configs(
     target_asset : Callable
         The asset (function or class) intended to be mocked
     broken_assets_module : ModuleType
-        The module that contains the mocking assets (parameters)
+        The module that contains the mocking assets (parameters). If
+        `target_asset` is a function, it must contains functions that mock it.
+        If `target_asset` is a class, it must contains classes that mock it.
+        Broken assets must start with '_test' (case insensitive) and be
+        declared in `broken_assets_module` (it will ignore assets imported from
+        other modules)
     student_test_module : ModuleType
-        The student's test module
+        The student's test module, which will be assessed by patching
+        `target_asset` with the broken assets found in `broken_assets_module`
+    target_asset_module : ModuleType, optional
+        The module in which the target asset will be patched, defaults
+        to `student_test_module`
 
     Returns
     -------
         TestAssessmentConfigs
     """
+    if target_asset_module is None:
+        target_asset_module = student_test_module
+
     STUDENT_TEST_FILE_PATH = str(
-        Path(student_test_module.__file__).relative_to(Path.cwd())
+        Path(str(student_test_module.__file__)).relative_to(Path.cwd())
     )
 
     def get_user_test_functions_from(test_file_path):
@@ -398,20 +425,20 @@ def get_test_assessment_configs(
     )
 
     BROKEN_ASSETS_LIST = [
-        asset
-        for asset_name, asset in inspect.getmembers(broken_assets_module)
+        b_asset
+        for b_asset_name, b_asset in inspect.getmembers(broken_assets_module)
         if (
-            (inspect.isclass(asset) or inspect.isfunction(asset))
-            and asset_name.lower().startswith("_test")
-            and inspect.getmodule(asset) is broken_assets_module
+            has_same_type(b_asset, target_asset)
+            and b_asset_name.lower().startswith("_test")
+            and inspect.getmodule(b_asset) is broken_assets_module
         )
     ]
 
-    PATCH_TARGET = (
-        student_test_module.__name__ + "." + target_asset.__qualname__
+    PATCH_TARGET = ".".join(
+        [target_asset_module.__name__, target_asset.__qualname__]
     )
     BROKEN_ASSETS_FILE_PATH = str(
-        Path(broken_assets_module.__file__).relative_to(Path.cwd())
+        Path(str(broken_assets_module.__file__)).relative_to(Path.cwd())
     )
     return TestAssessmentConfigs(
         STUDENT_TEST_FILE_PATH,
@@ -419,6 +446,14 @@ def get_test_assessment_configs(
         BROKEN_ASSETS_LIST,
         BROKEN_ASSETS_FILE_PATH,
         PATCH_TARGET,
+    )
+
+
+def has_same_type(broken_asset, target_asset):
+    return (
+        inspect.isclass(broken_asset) and inspect.isclass(target_asset)
+    ) or (
+        inspect.isfunction(broken_asset) and inspect.isfunction(target_asset)
     )
 
 
@@ -454,8 +489,8 @@ def get_skip_markers(ta_cfg: TestAssessmentConfigs) -> List[MarkDecorator]:
 
 
 def run_pytest_quietly(
-    pytest_args: Union[List[str], os.PathLike] = None,
-    pytest_plguins: Sequence[object] = None,
+    pytest_args: Union[List[str], os.PathLike, None] = None,
+    pytest_plguins: Optional[Sequence[Any]] = None,
 ):
     """Run pytest.main() without printing to stdout.
 
@@ -522,7 +557,7 @@ def assert_fails_with_broken_asset(
     elif return_code != pytest.ExitCode.TESTS_FAILED:
         raise AssertionError(
             "Ocorreu algum erro inesperado ao executar seus testes.\n"
-            f"Código de saída: {return_code.name}\n"
+            f"Código de saída: {return_code.name}\n"  # type: ignore
         )
 
 
@@ -555,5 +590,5 @@ def assert_fails_with_missing_feature_usage(
     elif return_code != pytest.ExitCode.TESTS_FAILED:
         raise AssertionError(
             "Ocorreu algum erro inesperado ao executar seus testes.\n"
-            f"Código de saída: {return_code.name}\n"
+            f"Código de saída: {return_code.name}\n"  # type: ignore
         )
