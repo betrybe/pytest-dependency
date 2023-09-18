@@ -4,11 +4,24 @@ __version__ = "$VERSION"
 
 import inspect
 import logging
+import os
+import contextlib
+from dataclasses import dataclass
+from pathlib import Path
 from types import ModuleType
-from typing import Callable, Dict, List, Type
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Type,
+    Union,
+    Sequence,
+)
 
 import pytest
-from _pytest.mark.structures import ParameterSet
+from _pytest.mark.structures import ParameterSet, MarkDecorator
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +36,7 @@ class DependencyItemStatus(object):
     Phases = ("setup", "call", "teardown")
 
     def __init__(self):
-        self.results = {w: None for w in self.Phases}
+        self.results: Dict[str, Optional[str]] = {w: None for w in self.Phases}
 
     def __str__(self):
         status_list = [f"{w}: {self.results[w]}" for w in self.Phases]
@@ -99,26 +112,50 @@ class DependencyManager(object):
         )
         status.addResult(rep)
 
-    def checkDepend(self, depends, item):
+    def checkDepend(self, depends, item, include_all_instances=False):
         logger.debug(
             "check dependencies of %s in %s scope ...", item.name, self.scope
         )
-        for i in depends:
-            if i in self.results:
-                if self.results[i].isSuccess():
-                    logger.debug("... %s succeeded", i)
+        for dep in depends:
+            # needs to change this condition
+            if include_all_instances:
+                dep_instances = [
+                    dep_instance
+                    for dep_instance in self.results
+                    if dep_instance.startswith(dep)
+                ]
+                for dep_instance in dep_instances:
+                    if self.results[dep_instance].isSuccess():
+                        logger.debug("... %s succeeded", dep_instance)
+                        continue
+                    else:
+                        logger.debug("... %s has not succeeded", dep_instance)
+                        logger.info(
+                            "skip %s because it depends on %s",
+                            item.name,
+                            dep_instance,
+                        )
+                        pytest.skip(f"{item.name} depends on {dep_instance}")
+                else:
+                    logger.debug("... %s is unknown", dep)
+                    if _ignore_unknown:
+                        continue
+                continue
+            elif dep in self.results:
+                if self.results[dep].isSuccess():
+                    logger.debug("... %s succeeded", dep)
                     continue
                 else:
-                    logger.debug("... %s has not succeeded", i)
+                    logger.debug("... %s has not succeeded", dep)
             else:
-                logger.debug("... %s is unknown", i)
+                logger.debug("... %s is unknown", dep)
                 if _ignore_unknown:
                     continue
-            logger.info("skip %s because it depends on %s", item.name, i)
-            pytest.skip(f"{item.name} depends on {i}")
+            logger.info("skip %s because it depends on %s", item.name, dep)
+            pytest.skip(f"{item.name} depends on {dep}")
 
 
-def depends(request, other, scope="module"):
+def depends(request, other, scope="module", include_all_instances=False):
     """Add dependency on other test.
 
     Call pytest.skip() unless a successful outcome of all of the tests in
@@ -144,7 +181,7 @@ def depends(request, other, scope="module"):
     """
     item = request.node
     manager = DependencyManager.getManager(item, scope=scope)
-    manager.checkDepend(other, item)
+    manager.checkDepend(other, item, include_all_instances)  # type: ignore
 
 
 def pytest_addoption(parser):
@@ -203,7 +240,11 @@ def pytest_runtest_setup(item):
         if depends := marker.kwargs.get("depends"):
             scope = marker.kwargs.get("scope", "module")
             manager = DependencyManager.getManager(item, scope=scope)
-            manager.checkDepend(depends, item)
+            manager.checkDepend(  # type: ignore
+                depends,
+                item,
+                include_all_instances=True,
+            )
 
 
 def mark_dependency(mocked, dependent_tests):
@@ -322,3 +363,232 @@ def _build_asset_map(mocks_module):
             and inspect.getmodule(asset) is mocks_module
         )
     }
+
+
+@dataclass
+class TestAssessmentConfigs:
+    STUDENT_TEST_FILE_PATH: str
+    STUDENT_TEST_FUNCTIONS: List[str]
+    BROKEN_ASSETS_LIST: List[Callable]
+    BROKEN_ASSETS_FILE_PATH: str
+    PATCH_TARGET: str
+
+
+def get_test_assessment_configs(
+    target_asset: Callable[[Any], Any],
+    broken_assets_module: ModuleType,
+    student_test_module: ModuleType,
+    *,
+    target_asset_module: Optional[ModuleType] = None,
+) -> TestAssessmentConfigs:
+    """Returns a dataclass with the configs for the assessment of a
+    student's test file.
+
+    Parameters
+    ----------
+    target_asset : Callable
+        The asset (function or class) intended to be mocked
+    broken_assets_module : ModuleType
+        The module that contains the mocking assets (parameters). If
+        `target_asset` is a function, it must contains functions that mock it.
+        If `target_asset` is a class, it must contains classes that mock it.
+        Broken assets must start with '_test' (case insensitive) and be
+        declared in `broken_assets_module` (it will ignore assets imported from
+        other modules)
+    student_test_module : ModuleType
+        The student's test module, which will be assessed by patching
+        `target_asset` with the broken assets found in `broken_assets_module`
+    target_asset_module : ModuleType, optional
+        The module in which the target asset will be patched, defaults
+        to `student_test_module`
+
+    Returns
+    -------
+        TestAssessmentConfigs
+    """
+    if target_asset_module is None:
+        target_asset_module = student_test_module
+
+    STUDENT_TEST_FILE_PATH = str(
+        Path(str(student_test_module.__file__)).relative_to(Path.cwd())
+    )
+
+    def get_user_test_functions_from(test_file_path):
+        return [
+            test_file_path + "::" + member[0]
+            for member in inspect.getmembers(student_test_module)
+            if inspect.isfunction(member[1]) and member[0].startswith("test_")
+        ]
+
+    STUDENT_TEST_FUNCTIONS = get_user_test_functions_from(
+        STUDENT_TEST_FILE_PATH
+    )
+
+    BROKEN_ASSETS_LIST = [
+        b_asset
+        for b_asset_name, b_asset in inspect.getmembers(broken_assets_module)
+        if (
+            has_same_type(b_asset, target_asset)
+            and b_asset_name.lower().startswith("_test")
+            and inspect.getmodule(b_asset) is broken_assets_module
+        )
+    ]
+
+    PATCH_TARGET = ".".join(
+        [target_asset_module.__name__, target_asset.__qualname__]
+    )
+    BROKEN_ASSETS_FILE_PATH = str(
+        Path(str(broken_assets_module.__file__)).relative_to(Path.cwd())
+    )
+    return TestAssessmentConfigs(
+        STUDENT_TEST_FILE_PATH,
+        STUDENT_TEST_FUNCTIONS,
+        BROKEN_ASSETS_LIST,
+        BROKEN_ASSETS_FILE_PATH,
+        PATCH_TARGET,
+    )
+
+
+def has_same_type(broken_asset, target_asset):
+    return (
+        inspect.isclass(broken_asset) and inspect.isclass(target_asset)
+    ) or (
+        inspect.isfunction(broken_asset) and inspect.isfunction(target_asset)
+    )
+
+
+def get_skip_markers(ta_cfg: TestAssessmentConfigs) -> List[MarkDecorator]:
+    """Returns a list of skip markers for `pytestmark` based on the configs for
+    the assessment of a student's test file. The list contains:
+        - a skipif marker if the student's test file does not have any test
+        functions yet
+        - a dependency marker for each test function in the student's test file
+
+    Parameters
+    ----------
+    ta_cfg : TestAssessmentConfigs
+        Object with the configs for the assessment of a student's test file,
+        obtained from `get_test_assessment_configs()`
+
+    Returns
+    -------
+    List[MarkDecorator]
+        List of skip markers for pytestmark
+    """
+    return [
+        pytest.mark.skipif(
+            not ta_cfg.STUDENT_TEST_FUNCTIONS,
+            reason="Requisito não implementado",
+        ),
+        pytest.mark.dependency(
+            depends=ta_cfg.STUDENT_TEST_FUNCTIONS,
+            scope="session",
+            include_all_instances=True,
+        ),
+    ]
+
+
+def run_pytest_quietly(
+    pytest_args: Union[List[str], os.PathLike, None] = None,
+    pytest_plguins: Optional[Sequence[Any]] = None,
+):
+    """Run pytest.main() without printing to stdout.
+
+    Parameters
+    ----------
+    pytest_args : Union[List[str], os.PathLike[str]], optional
+        Arguments to pass to pytest.main()
+    pytest_plguins : Sequence[object], optional
+        Plugins to pass to pytest.main()
+
+    Returns
+    -------
+    int
+        Exit code of pytest.main()
+    """
+
+    with open(os.devnull, "w") as student_output:
+        with contextlib.redirect_stdout(student_output):
+            return_code = pytest.main(pytest_args)
+    return return_code
+
+
+def assert_fails_with_broken_asset(
+    broken_asset: Callable,
+    return_code: Union[int, pytest.ExitCode],
+    ta_cfg: TestAssessmentConfigs,
+):
+    """
+    Raises AssertionError if return_code is not pytest.ExitCode.TESTS_FAILED,
+    and prints a hint with the broken asset's docstring.
+
+    Parameters
+    ----------
+    broken_asset : str
+        broken asset (function or class) intended to substitute the target
+        asset, probably a param of `pytest.mark.parametrize`
+    return_code : int | ExitCode
+        ExitCode of the `pytest.main()` call
+    ta_cfg : TestAssessmentConfigs
+        Object with the configs for the assessment of a student's test file,
+        obtained from `get_test_assessment_configs()`
+
+    Raises
+    ------
+    AssertionError
+        If return_code is not pytest.ExitCode.TESTS_FAILED, and prints a hint
+        with the broken asset's docstring.
+    """
+    if return_code == pytest.ExitCode.OK:
+        hint = (
+            f"Nossa dica é: '{broken_asset.__doc__}'\n"
+            if broken_asset.__doc__
+            else (
+                "Verifique se seus testes atendem aos detalhes do requisito.\n"
+            )
+        )
+
+        raise AssertionError(
+            f"Seus testes em '{ta_cfg.STUDENT_TEST_FILE_PATH}' deveriam falhar"
+            f" com a função '{broken_asset.__name__}' do arquivo "
+            f"'{ta_cfg.BROKEN_ASSETS_FILE_PATH}'.\n"
+            f"{hint}"
+        )
+    elif return_code != pytest.ExitCode.TESTS_FAILED:
+        raise AssertionError(
+            "Ocorreu algum erro inesperado ao executar seus testes.\n"
+            f"Código de saída: {return_code.name}\n"  # type: ignore
+        )
+
+
+def assert_fails_with_missing_feature_usage(
+    feature_description: str,
+    return_code: Union[int, pytest.ExitCode],
+    ta_cfg: TestAssessmentConfigs,
+):
+    """
+    Raises AssertionError if return_code is not pytest.ExitCode.TESTS_FAILED,
+    and prints a hint with the feature's description.
+
+    Parameters
+    ----------
+    feature_description : str
+        Description of the feature that should be used in the student's test
+        file
+    return_code : int | ExitCode
+        ExitCode of the `pytest.main()` call
+    ta_cfg : TestAssessmentConfigs
+        Object with the configs for the assessment of a student's test file,
+        obtained from `get_test_assessment_configs()`
+    """
+    if return_code == pytest.ExitCode.OK:
+
+        raise AssertionError(
+            f"Seus testes em '{ta_cfg.STUDENT_TEST_FILE_PATH}' deveriam usar "
+            f"a seguinte feature do Pytest: {feature_description}.\n"
+        )
+    elif return_code != pytest.ExitCode.TESTS_FAILED:
+        raise AssertionError(
+            "Ocorreu algum erro inesperado ao executar seus testes.\n"
+            f"Código de saída: {return_code.name}\n"  # type: ignore
+        )
